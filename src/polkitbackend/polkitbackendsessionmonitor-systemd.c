@@ -25,7 +25,7 @@
 #include <grp.h>
 #include <string.h>
 #include <glib/gstdio.h>
-#include <systemd/sd-login.h>
+#include <elogind/sd-login.h>
 #include <stdlib.h>
 
 #include <polkit/polkit.h>
@@ -352,7 +352,7 @@ polkit_backend_session_monitor_get_session_for_subject (PolkitBackendSessionMoni
     }
 
 #if HAVE_SD_UID_GET_DISPLAY
-  /* Now do process -> uid -> graphical session (systemd version 213)*/
+  /* Now do process -> uid -> graphical session (elogind version 213)*/
   if (sd_pid_get_owner_uid (pid, &uid) < 0)
     goto out;
 

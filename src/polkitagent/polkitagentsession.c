@@ -596,7 +596,7 @@ polkit_agent_session_initiate (PolkitAgentSession *session)
       goto error;
     }
 
-  helper_argv[0] = PACKAGE_PREFIX "/lib/polkit-1/polkit-agent-helper-1";
+  helper_argv[0] = "/run/setuid-programs/polkit-agent-helper-1";
   helper_argv[1] = passwd->pw_name;
   helper_argv[2] = NULL;
 

@@ -40,7 +40,7 @@
 #include <polkit/polkitprivate.h>
 
 #ifdef HAVE_LIBSYSTEMD
-#include <systemd/sd-login.h>
+#include <elogind/sd-login.h>
 #endif /* HAVE_LIBSYSTEMD */
 
 #include <jsapi.h>

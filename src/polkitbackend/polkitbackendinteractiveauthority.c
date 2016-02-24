@@ -300,7 +300,7 @@ polkit_backend_interactive_authority_init (PolkitBackendInteractiveAuthority *au
 
   priv = POLKIT_BACKEND_INTERACTIVE_AUTHORITY_GET_PRIVATE (authority);
 
-  directory = g_file_new_for_path (PACKAGE_DATA_DIR "/polkit-1/actions");
+  directory = g_file_new_for_path (PACKAGE_SYSCONF_DIR "/polkit-1/actions");
   priv->action_pool = polkit_backend_action_pool_new (directory);
   g_object_unref (directory);
   g_signal_connect (priv->action_pool,

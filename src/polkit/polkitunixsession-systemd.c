@@ -30,7 +30,7 @@
 #include "polkiterror.h"
 #include "polkitprivate.h"
 
-#include <systemd/sd-login.h>
+#include <elogind/sd-login.h>
 
 /**
  * SECTION:polkitunixsession

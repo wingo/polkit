@@ -188,23 +188,23 @@ AC_ARG_ENABLE([test],
 AM_CONDITIONAL(BUILD_TEST, [test "x$enable_test" = "xyes"])
 
 dnl ---------------------------------------------------------------------------
-dnl - Select wether to use libsystemd-login or ConsoleKit for session tracking
+dnl - Select wether to use libelogind or ConsoleKit for session tracking
 dnl ---------------------------------------------------------------------------
 
 have_libsystemd=no
 SESSION_TRACKING=ConsoleKit
 
-AC_ARG_ENABLE([libsystemd-login],
-              [AS_HELP_STRING([--enable-libsystemd-login[=@<:@auto/yes/no@:>@]], [Use libsystemd (auto/yes/no)])],
+AC_ARG_ENABLE([libelogind],
+              [AS_HELP_STRING([--enable-libelogind[=@<:@auto/yes/no@:>@]], [Use libsystemd (auto/yes/no)])],
               [enable_libsystemd_login=$enableval],
               [enable_libsystemd_login=auto])
 if test "$enable_libsystemd_login" != "no"; then
   PKG_CHECK_MODULES([LIBSYSTEMD],
     [libsystemd],
     [have_libsystemd=yes],
-    dnl if libsystemd is not available, fall back to the older libsystemd-login
+    dnl if libsystemd is not available, fall back to the older libelogind
     [PKG_CHECK_MODULES([LIBSYSTEMD_LOGIN],
-      [libsystemd-login],
+      [libelogind],
       [
         have_libsystemd=yes
         LIBSYSTEMD_CFLAGS="$LIBSYSTEMD_LOGIN_CFLAGS"
@@ -212,7 +212,7 @@ if test "$enable_libsystemd_login" != "no"; then
       ],
       [have_libsystemd=no])])
   if test "$have_libsystemd" = "yes"; then
-    SESSION_TRACKING=libsystemd-login
+    SESSION_TRACKING=libelogind
     AC_DEFINE([HAVE_LIBSYSTEMD], 1, [Define to 1 if libsystemd is available])
     save_LIBS=$LIBS
     LIBS=$LIBSYSTEMD_LIBS
@@ -220,14 +220,14 @@ if test "$enable_libsystemd_login" != "no"; then
     LIBS=$save_LIBS
   else
     if test "$enable_libsystemd_login" = "yes"; then
-      AC_MSG_ERROR([libsystemd support requested but libsystemd or libsystemd-login library not found])
+      AC_MSG_ERROR([libsystemd support requested but libsystemd or libelogind library not found])
     fi
   fi
 fi
 
 AS_IF([test "x$cross_compiling" != "xyes" ], [
   AS_IF([test "$have_libsystemd" = "yes"], [
-    AS_IF([test ! -d /sys/fs/cgroup/systemd/ ], [
+    AS_IF([false], [
       AS_IF([test "$enable_libsystemd_login" = "yes"], [
         AC_MSG_WARN([libsystemd requested but system does not appear to be using systemd])
       ], [
@@ -239,7 +239,7 @@ AS_IF([test "x$cross_compiling" != "xyes" ], [
       AS_IF([test "$enable_libsystemd_login" = "no" ], [
         AC_MSG_WARN([ConsoleKit requested but system appears to use systemd])
       ], [
-        AC_MSG_ERROR([ConsoleKit autoconfigured, but systemd is in use (missing libsystemd or libsystemd-login pkg-config?)])
+        AC_MSG_ERROR([ConsoleKit autoconfigured, but systemd is in use (missing libsystemd or libelogind pkg-config?)])
       ])
     ])
   ])
