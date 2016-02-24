@@ -22,13 +22,17 @@
 #include "config.h"
 #include <errno.h>
 #include <pwd.h>
+#include <fcntl.h>
 #include <grp.h>
 #ifdef HAVE_NETGROUP_H
 #include <netgroup.h>
 #else
 #include <netdb.h>
 #endif
+#include <stdlib.h>
 #include <string.h>
+#include <sys/types.h>
+#include <sys/stat.h>
 #include <glib/gstdio.h>
 #include <locale.h>
 
@@ -112,9 +116,8 @@ static AuthenticationAgent *get_authentication_agent_for_subject (PolkitBackendI
                                                                   PolkitSubject *subject);
 
 
-static AuthenticationSession *get_authentication_session_for_uid_and_cookie (PolkitBackendInteractiveAuthority *authority,
-                                                                             uid_t                              uid,
-                                                                             const gchar                       *cookie);
+static AuthenticationSession *get_authentication_session_for_cookie (PolkitBackendInteractiveAuthority *authority,
+                                                                     const gchar                       *cookie);
 
 static GList *get_authentication_sessions_initiated_by_system_bus_unique_name (PolkitBackendInteractiveAuthority *authority,
                                                                                const gchar *system_bus_unique_name);
@@ -454,9 +457,6 @@ struct AuthenticationAgent
   GVariant *registration_options;
   gchar *object_path;
   gchar *unique_system_bus_name;
-  GRand *cookie_pool;
-  gchar *cookie_prefix;
-  guint64  cookie_serial;
 
   GDBusProxy *proxy;
 
@@ -1443,30 +1443,43 @@ authentication_session_cancelled_cb (GCancellable *cancellable,
   authentication_session_cancel (session);
 }
 
-/* We're not calling this a UUID, but it's basically
- * the same thing, just not formatted that way because:
- *
- *  - I'm too lazy to do it
- *  - If we did, people might think it was actually
- *    generated from /dev/random, which we're not doing
- *    because this value doesn't actually need to be
- *    globally unique.
- */
 static void
-append_rand_u128_str (GString *buf,
-                      GRand   *pool)
+get_random_bytes_or_abort (guint8 *buf, size_t count)
 {
-  g_string_append_printf (buf, "%08x%08x%08x%08x",
-                          g_rand_int (pool),
-                          g_rand_int (pool),
-                          g_rand_int (pool),
-                          g_rand_int (pool));
+  int fd;
+
+  fd = open ("/dev/urandom", O_RDONLY);
+  if (fd < 0)
+    {
+      perror ("failed to open /dev/urandom");
+      abort ();
+    }
+
+  while (count > 0)
+    {
+      ssize_t ret;
+
+      ret = read (fd, buf, count);
+      if (ret == 0)
+        {
+          fprintf (stderr, "unexpected EOF reading /dev/urandom\n");
+          abort ();
+        }
+      if (ret < 0)
+        {
+          if (errno == -EAGAIN)
+            continue;
+          perror ("error reading from /dev/urandom");
+          abort ();
+        }
+      count -= ret;
+      buf += ret;
+    }
+
+  close (fd);
 }
 
-/* A value that should be unique to the (AuthenticationAgent, AuthenticationSession)
- * pair, and not guessable by other agents.
- *
- * <agent serial> - <agent uuid> - <session serial> - <session uuid>
+/* A cryptographically secure token.
  *
  * See http://lists.freedesktop.org/archives/polkit-devel/2015-June/000425.html
  *
@@ -1475,15 +1488,17 @@ static gchar *
 authentication_agent_generate_cookie (AuthenticationAgent *agent)
 {
   GString *buf = g_string_new ("");
+  guint8 nonce[32];
+  int i;
+  const char hex[] = "0123456789abcdef";
 
-  g_string_append (buf, agent->cookie_prefix);
-  
-  g_string_append_c (buf, '-');
-  agent->cookie_serial++;
-  g_string_append_printf (buf, "%" G_GUINT64_FORMAT, 
-                          agent->cookie_serial);
-  g_string_append_c (buf, '-');
-  append_rand_u128_str (buf, agent->cookie_pool);
+  get_random_bytes_or_abort (nonce, 32);
+
+  for (i = 0; i < 32; i++)
+    {
+      g_string_append_c (buf, hex[nonce[i]>>4]);
+      g_string_append_c (buf, hex[nonce[i]& 0xf]);
+    }
 
   return g_string_free (buf, FALSE);
 }
@@ -1604,8 +1619,6 @@ authentication_agent_unref (AuthenticationAgent *agent)
       g_free (agent->unique_system_bus_name);
       if (agent->registration_options != NULL)
         g_variant_unref (agent->registration_options);
-      g_rand_free (agent->cookie_pool);
-      g_free (agent->cookie_prefix);
       g_free (agent);
     }
 }
@@ -1659,25 +1672,6 @@ authentication_agent_new (guint64      serial,
   agent->locale = g_strdup (locale);
   agent->registration_options = registration_options != NULL ? g_variant_ref (registration_options) : NULL;
   agent->proxy = proxy;
-
-  {
-    GString *cookie_prefix = g_string_new ("");
-    GRand *agent_private_rand = g_rand_new ();
-
-    g_string_append_printf (cookie_prefix, "%" G_GUINT64_FORMAT "-", agent->serial);
-
-    /* Use a uniquely seeded PRNG to get a prefix cookie for this agent,
-     * whose sequence will not correlate with the per-authentication session
-     * cookies.
-     */
-    append_rand_u128_str (cookie_prefix, agent_private_rand);
-    g_rand_free (agent_private_rand);
-
-    agent->cookie_prefix = g_string_free (cookie_prefix, FALSE);
-    
-    /* And a newly seeded pool for per-session cookies */
-    agent->cookie_pool = g_rand_new ();
-  }
 
   return agent;
 }
@@ -1751,10 +1745,27 @@ get_authentication_agent_for_subject (PolkitBackendInteractiveAuthority *authori
   return agent;
 }
 
+/* Return 0 unless A and B are equal.  */
+static gboolean
+constant_time_equals (const char *a, const char *b)
+{
+  char result = 0;
+  size_t len;
+  size_t i;
+
+  len = strlen (a);
+  if (strlen (b) != len)
+    return 0;
+
+  for (i = 0; i < len; i++)
+    result |= a[i] ^ b[i];
+
+  return !result;
+}
+
 static AuthenticationSession *
-get_authentication_session_for_uid_and_cookie (PolkitBackendInteractiveAuthority *authority,
-                                               uid_t                              uid,
-                                               const gchar                       *cookie)
+get_authentication_session_for_cookie (PolkitBackendInteractiveAuthority *authority,
+                                       const gchar                       *cookie)
 {
   PolkitBackendInteractiveAuthorityPrivate *priv;
   GHashTableIter hash_iter;
@@ -1772,28 +1783,11 @@ get_authentication_session_for_uid_and_cookie (PolkitBackendInteractiveAuthority
     {
       GList *l;
 
-      /* We need to ensure that if somehow we have duplicate cookies
-       * due to wrapping, that the cookie used is matched to the user
-       * who called AuthenticationAgentResponse2.  See
-       * http://lists.freedesktop.org/archives/polkit-devel/2015-June/000425.html
-       * 
-       * Except if the legacy AuthenticationAgentResponse is invoked,
-       * we don't know the uid and hence use -1.  Continue to support
-       * the old behavior for backwards compatibility, although everyone
-       * who is using our own setuid helper will automatically be updated
-       * to the new API.
-       */
-      if (uid != (uid_t)-1)
-        {
-          if (agent->creator_uid != uid)
-            continue;
-        }
-
       for (l = agent->active_sessions; l != NULL; l = l->next)
         {
           AuthenticationSession *session = l->data;
 
-          if (strcmp (session->cookie, cookie) == 0)
+          if (constant_time_equals (session->cookie, cookie))
             {
               result = session;
               goto out;
@@ -2839,7 +2833,7 @@ polkit_backend_interactive_authority_authentication_agent_response (PolkitBacken
     }
 
   /* find the authentication session */
-  session = get_authentication_session_for_uid_and_cookie (interactive_authority, uid, cookie);
+  session = get_authentication_session_for_cookie (interactive_authority, cookie);
   if (session == NULL)
     {
       g_set_error (error,
